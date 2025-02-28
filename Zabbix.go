@@ -22,10 +22,10 @@ type Resposta struct {
 
 func main() {
 	// URL da API Zabbix
-	url := "http://--------//zabbix/api_jsonrpc.php"
+	url := "http://-----//zabbix/api_jsonrpc.php"
 
 	// Token de autenticação
-	tokenDeAutenticacao := "======="
+	tokenDeAutenticacao := "---"
 
 	// Cabeçalho da requisição
 	cabecalhos := map[string]string{
@@ -79,14 +79,15 @@ func main() {
 	}
 
 	// Criação do arquivo CSV
-	arquivo, erro := os.Create("Relatorio_AWS.csv")
+	arquivo, erro := os.Create("Relatorio_Hosts_.csv")
 	if erro != nil {
 		log.Fatalf("Erro ao criar o arquivo CSV: %v", erro)
 	}
 	defer arquivo.Close()
 
-	// Criação de um writer para o arquivo CSV
+	// Configurando o writer CSV para usar ponto e vírgula como delimitador
 	writer := csv.NewWriter(arquivo)
+	writer.Comma = ';' // Define o delimitador como ponto e vírgula
 	defer writer.Flush()
 
 	// Adicionando cabeçalhos ao CSV
@@ -105,5 +106,5 @@ func main() {
 	}
 
 	// Mensagem indicando sucesso
-	fmt.Println("Relatório exportado com sucesso para 'Relatorio_Hosts_Zabbix.csv'.")
+	fmt.Println("Relatório exportado com sucesso para 'Relatorio_Hosts_.csv'.")
 }
