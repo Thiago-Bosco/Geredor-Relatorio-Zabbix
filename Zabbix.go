@@ -8,12 +8,25 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 )
 
-// Estrutura para o JSON de resposta
+type Item struct {
+	ID   string `json:"itemid"`
+	Nome string `json:"name"`
+}
+
+type Trigger struct {
+	ID   string `json:"triggerid"`
+	Nome string `json:"description"`
+}
+
 type Host struct {
-	ID   string `json:"hostid"`
-	Nome string `json:"host"`
+	ID       string    `json:"hostid"`
+	Nome     string    `json:"host"`
+	Status   string    `json:"status"`
+	Items    []Item    `json:"items"`
+	Triggers []Trigger `json:"triggers"`
 }
 
 type Resposta struct {
@@ -21,90 +34,142 @@ type Resposta struct {
 }
 
 func main() {
-	// URL da API Zabbix
-	url := "http://-----//zabbix/api_jsonrpc.php"
+	url := "http:///zabbix/api_jsonrpc.php"
+	tokenDeAutenticacao := ""
 
-	// Token de autenticação
-	tokenDeAutenticacao := "---"
+	client := &http.Client{
+		Timeout: 30 * time.Second, // Timeout de 30 segundos
+	}
 
-	// Cabeçalho da requisição
 	cabecalhos := map[string]string{
 		"Content-Type": "application/json-rpc",
 	}
 
+	// Atualizando a requisição para incluir o campo "status"
 	pedido := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"method":  "host.get",
 		"params": map[string]interface{}{
-			"output": []string{"hostid", "host"},
+			"output":         []string{"hostid", "host", "status"}, // Incluindo "status"
+			"selectItems":    []string{"itemid", "name"},
+			"selectTriggers": []string{"triggerid", "description"},
 		},
 		"auth": tokenDeAutenticacao,
 		"id":   1,
 	}
 
+	if erro := executarRequisicao(url, cabecalhos, pedido, client); erro != nil {
+		log.Fatalf("Erro ao gerar o relatório: %v", erro)
+	}
+}
+
+func executarRequisicao(url string, cabecalhos map[string]string, pedido map[string]interface{}, client *http.Client) error {
 	pedidoBytes, erro := json.Marshal(pedido)
 	if erro != nil {
-		log.Fatalf("Erro ao criar o pedido JSON: %v", erro)
+		return fmt.Errorf("erro ao criar o pedido JSON: %w", erro)
 	}
 
-	requisicao, erro := http.NewRequest("POST", url, bytes.NewBuffer(pedidoBytes))
+	req, erro := http.NewRequest("POST", url, bytes.NewBuffer(pedidoBytes))
 	if erro != nil {
-		log.Fatalf("Erro ao criar a requisição: %v", erro)
+		return fmt.Errorf("erro ao criar a requisição: %w", erro)
 	}
 
 	for chave, valor := range cabecalhos {
-		requisicao.Header.Set(chave, valor)
+		req.Header.Set(chave, valor)
 	}
 
-	client := &http.Client{}
-	resposta, erro := client.Do(requisicao)
+	resposta, erro := client.Do(req)
 	if erro != nil {
-		log.Fatalf("Erro na requisição: %v", erro)
+		return fmt.Errorf("erro na requisição: %w", erro)
 	}
 	defer resposta.Body.Close()
 
 	if resposta.StatusCode != 200 {
-		log.Fatalf("Erro na requisição, código de status: %d", resposta.StatusCode)
+		return fmt.Errorf("erro na requisição, código de status: %d", resposta.StatusCode)
 	}
 
 	var respostaFinal Resposta
 	erro = json.NewDecoder(resposta.Body).Decode(&respostaFinal)
 	if erro != nil {
-		log.Fatalf("Erro ao decodificar a resposta JSON: %v", erro)
+		return fmt.Errorf("erro ao decodificar a resposta JSON: %w", erro)
 	}
 
 	if len(respostaFinal.Resultados) == 0 {
-		fmt.Println("Nenhum host encontrado.")
-		return
+		return fmt.Errorf("nenhum host encontrado.")
 	}
 
-	// Criação do arquivo CSV
-	arquivo, erro := os.Create("Relatorio_Hosts_.csv")
-	if erro != nil {
-		log.Fatalf("Erro ao criar o arquivo CSV: %v", erro)
+	return gerarCSV(respostaFinal.Resultados)
+}
+
+func gerarCSV(hosts []Host) error {
+	arquivo, err := os.Create("Relatorio_Zabbix_Completo.csv")
+	if err != nil {
+		return fmt.Errorf("erro ao criar o arquivo CSV: %w", err)
 	}
 	defer arquivo.Close()
 
-	// Configurando o writer CSV para usar ponto e vírgula como delimitador
 	writer := csv.NewWriter(arquivo)
-	writer.Comma = ';' // Define o delimitador como ponto e vírgula
-	defer writer.Flush()
+	writer.Comma = ';'
 
-	// Adicionando cabeçalhos ao CSV
-	cabecalhosCSV := []string{"ID do Host", "Nome do Host"}
-	erro = writer.Write(cabecalhosCSV)
-	if erro != nil {
-		log.Fatalf("Erro ao escrever no arquivo CSV: %v", erro)
+	cabecalhos := []string{
+		"Host ID", "Host Nome", "Status", "Item 1 ID", "Item 1 Nome",
+		"Item 2 ID", "Item 2 Nome", "Trigger 1 ID", "Trigger 1 Descrição",
+		"Trigger 2 ID", "Trigger 2 Descrição",
+	}
+	err = writer.Write(cabecalhos)
+	if err != nil {
+		return fmt.Errorf("erro ao escrever os cabeçalhos no arquivo CSV: %w", err)
 	}
 
-	// Escrevendo os dados dos hosts no CSV
-	for _, host := range respostaFinal.Resultados {
-		erro := writer.Write([]string{host.ID, host.Nome})
-		if erro != nil {
-			log.Fatalf("Erro ao escrever no arquivo CSV: %v", erro)
+	statusMap := map[string]string{
+		"0": "Ativo",
+		"1": "Inativo",
+	}
+
+	for _, host := range hosts {
+		status, ok := statusMap[host.Status]
+		if !ok {
+			status = "Desconhecido" // Caso o status não esteja no mapa
+		}
+
+		itemCols := []string{}
+		for i, item := range host.Items {
+			itemCols = append(itemCols, item.ID, item.Nome)
+			if i == 1 {
+				break
+			}
+		}
+
+		for len(itemCols) < 4 {
+			itemCols = append(itemCols, "", "")
+		}
+
+		triggerCols := []string{}
+		for i, trigger := range host.Triggers {
+			triggerCols = append(triggerCols, trigger.ID, trigger.Nome)
+			if i == 1 {
+				break
+			}
+		}
+
+		for len(triggerCols) < 4 {
+			triggerCols = append(triggerCols, "", "")
+		}
+
+		linha := []string{
+			host.ID,
+			host.Nome,
+			status,
+		}
+		linha = append(linha, itemCols...)
+		linha = append(linha, triggerCols...)
+
+		err = writer.Write(linha)
+		if err != nil {
+			return fmt.Errorf("erro ao escrever os dados no arquivo CSV: %w", err)
 		}
 	}
 
-	// Mensagem indicando sucesso
-	fmt.Println("Relatório exportado com sucesso para 'Relatorio_Hosts_.csv'.")
+	writer.Flush()
+	return nil
 }
